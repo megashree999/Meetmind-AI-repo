@@ -1,0 +1,12 @@
+langgraph
+langchain
+langchain-core
+langchain-ollama
+pydantic
+python-dotenv
+langgraph-cli[inmem]
+chromadb
+langchain-chroma
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib

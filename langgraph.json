@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "meetmind": "./graph.py:graph"
+  },
+  "env": ".env"
+}
