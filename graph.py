@@ -69,6 +69,7 @@ class RouterOutput(BaseModel):
         return [self.route] if self.route else []
 
 class AgentState(TypedDict):
+    meeting_id: Optional[str]
     transcript: Optional[str]
     analysis: Optional[MeetingExtraction]
     user_query: Optional[str]
@@ -121,13 +122,27 @@ def index_transcript(state: AgentState):
     if not transcript:
         return {}
     
-    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-    chunks = splitter.split_text(transcript)
-    docs = [Document(page_content=chunk) for chunk in chunks]
+    import hashlib
+    # Always derive the meeting_id directly from the transcript to prevent LangGraph Studio stale state contamination
+    meeting_id = hashlib.sha256(transcript.encode('utf-8')).hexdigest()[:12]
     
     vector_store = get_vector_store()
+    
+    try:
+        results = vector_store.get(where={"meeting_id": meeting_id})
+        if results and results.get("ids") and len(results["ids"]) > 0:
+            print(f"[INDEX] Meeting {meeting_id} already indexed, skipping.")
+            return {"meeting_id": meeting_id}
+    except Exception as e:
+        print(f"[INDEX] Error checking existing meeting docs: {e}")
+        pass
+    
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    chunks = splitter.split_text(transcript)
+    docs = [Document(page_content=chunk, metadata={"meeting_id": meeting_id}) for chunk in chunks]
+    
     vector_store.add_documents(docs)
-    return {}
+    return {"meeting_id": meeting_id}
 
 def determine_actions(state: AgentState):
     """Inspect extracted analysis and automatically determine which action nodes must execute."""
@@ -278,15 +293,69 @@ If creating a ticket, also formulate a suitable ticket_title and ticket_descript
 
 def rag_query(state: AgentState):
     """Retrieve context and answer the query."""
+    import re
     query = state.get("user_query", "")
+    transcript = state.get("transcript", "")
     
+    import hashlib
+    # Derive meeting_id directly from current transcript to avoid stale state in LangGraph Studio
+    meeting_id = hashlib.sha256(transcript.encode('utf-8')).hexdigest()[:12] if transcript else state.get("meeting_id")
+    
+    q_lower = query.lower()
+    
+    # 1. Intercept deterministic participant queries
+    participant_keywords = [
+        "how many people", "how many members", "who are the people", 
+        "who are the members", "who are the participants", "who attended", 
+        "list the participants", "list the members", "list the people",
+        "who is in this meeting", "how many people in this meeting",
+        "who is in the meeting"
+    ]
+    if transcript and any(kw in q_lower for kw in participant_keywords):
+        speakers = set()
+        for line in transcript.split("\n"):
+            match = re.match(r'^\s*([A-Za-z0-9_\-\s]+):', line)
+            if match:
+                speakers.add(match.group(1).strip())
+        
+        if speakers:
+            speakers_list = sorted(list(speakers))
+            count = len(speakers_list)
+            names = ", ".join(speakers_list)
+            answer = f"There are {count} people in this meeting: {names}."
+            print(f"[RAG] Deterministic participant calculation used: {count}")
+            return {"retrieved_context": "Deterministic calculation from transcript", "answer": answer}
+
+    # 2. Normal RAG behavior
+    current_meeting_keywords = [
+        "this meeting", "this transcript", "today's meeting", 
+        "in this meeting", "who attended", "how many people"
+    ]
+    
+    is_current_meeting = False
+    if meeting_id and any(kw in q_lower for kw in current_meeting_keywords):
+        is_current_meeting = True
+
     vector_store = get_vector_store()
-    retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+    
+    if is_current_meeting:
+        print(f"[RAG] Filtering context by meeting_id: {meeting_id}")
+        retriever = vector_store.as_retriever(search_kwargs={"k": 5, "filter": {"meeting_id": meeting_id}})
+    else:
+        print("[RAG] Searching across all historical meetings")
+        retriever = vector_store.as_retriever(search_kwargs={"k": 5})
+        
     docs = retriever.invoke(query)
+    
+    # If we are strictly querying the current meeting, we can also inject the raw transcript
+    # if it's short enough to fit in the context window.
     context = "\n\n".join([doc.page_content for doc in docs])
     
+    if is_current_meeting and transcript and len(transcript) < 4000:
+        context = f"Full Transcript:\n{transcript}\n\nRelevant Chunks:\n{context}"
+    
     llm = get_llm()
-    prompt = f"Answer the user's question based ONLY on the context below.\n\nContext:\n{context}\n\nQuestion: {query}"
+    prompt = f"Answer the user's question based ONLY on the context below. Do not invent participants or events not in the context.\n\nContext:\n{context}\n\nQuestion: {query}"
     response = llm.invoke(prompt)
     
     return {"retrieved_context": context, "answer": response.content}
