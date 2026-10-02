@@ -61,7 +61,7 @@ Guest speaker David: I will review the API documentation."""
                 found_targets.add(name_key)
 
         # Check preview safety (NO real email sent)
-        if status == "preview":
+        if status == "PREVIEW":
             assert notif.get("body"), "Preview must include generated email body"
             print("  Preview confirmed: SAFE (no real email sent)")
 

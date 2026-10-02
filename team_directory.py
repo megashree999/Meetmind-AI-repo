@@ -1,21 +1,35 @@
 import os
-import json
+import sqlite3
 from typing import Dict, Any, Optional
 
-DIRECTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "team_members.json")
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "company_directory.db")
 
-def load_team_members(file_path: Optional[str] = None) -> Dict[str, Any]:
-    """Load team members directory from JSON file."""
-    path = file_path or DIRECTORY_FILE
+def load_team_members(db_path: Optional[str] = None) -> Dict[str, Any]:
+    """Load team members directory from SQLite database."""
+    path = db_path or DB_PATH
     if not os.path.exists(path):
         return {}
+    
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
+        conn = sqlite3.connect(path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT name, email, role, department FROM employees")
+        rows = cursor.fetchall()
+        
+        members = {}
+        for name, email, role, department in rows:
+            members[name] = {
+                "email": email,
+                "role": role,
+                "department": department
+            }
+        conn.close()
+        return members
+    except Exception as e:
+        print(f"Error reading from database: {e}")
         return {}
 
-def get_assignee_email(name: Optional[str], file_path: Optional[str] = None) -> str:
+def get_assignee_email(name: Optional[str], db_path: Optional[str] = None) -> str:
     """
     Look up the registered email address for a given assignee name.
     
@@ -29,7 +43,7 @@ def get_assignee_email(name: Optional[str], file_path: Optional[str] = None) -> 
     if not cleaned_name:
         return "email not found"
 
-    members = load_team_members(file_path)
+    members = load_team_members(db_path)
     if not members:
         return "email not found"
 

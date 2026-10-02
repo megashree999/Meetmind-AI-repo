@@ -113,17 +113,17 @@ def send_action_item_notification(
         status_msg = "SKIPPED (unknown or unassigned person)"
         logger.info(f"{assignee_name} -> {to_email} -> {status_msg}")
         return {
-            "status": "skipped_unknown_assignee",
+            "status": "SKIPPED",
             "assignee": assignee_name or "Unknown",
             "email": to_email or "None",
             "message": status_msg
         }
 
     if not to_email or to_email == "email not found":
-        status_msg = "SKIPPED (no registered email address)"
+        status_msg = f"SKIPPED (Assignee {assignee_name} not found in company directory. Email notification skipped.)"
         logger.info(f"{assignee_name} -> email not found -> {status_msg}")
         return {
-            "status": "skipped_no_email",
+            "status": "SKIPPED",
             "assignee": assignee_name,
             "email": "email not found",
             "message": status_msg
@@ -134,7 +134,7 @@ def send_action_item_notification(
         status_msg = f"SKIPPED (invalid recipient email format: '{to_email}')"
         logger.warning(f"{assignee_name} -> {to_email} -> {status_msg}")
         return {
-            "status": "skipped_invalid_recipient",
+            "status": "SKIPPED",
             "assignee": assignee_name,
             "email": to_email,
             "message": status_msg
@@ -145,10 +145,10 @@ def send_action_item_notification(
     # 3. Check if notifications are enabled
     notifications_enabled = os.environ.get("EMAIL_NOTIFICATIONS_ENABLED", "false").lower() == "true"
     if force_simulate or not notifications_enabled:
-        status_msg = "PREVIEW_GENERATED (EMAIL_NOTIFICATIONS_ENABLED=false)"
+        status_msg = "PREVIEW (Email prepared but EMAIL_NOTIFICATIONS_ENABLED=false)"
         logger.info(f"{assignee_name} -> {to_email} -> {status_msg}")
         return {
-            "status": "preview",
+            "status": "PREVIEW",
             "assignee": assignee_name,
             "email": to_email,
             "subject": subject,
@@ -161,10 +161,11 @@ def send_action_item_notification(
     if not service:
         logger.error(f"{assignee_name} -> {to_email} -> FAILED ({error_msg})")
         return {
-            "status": "failed",
+            "status": "FAILED",
             "assignee": assignee_name,
             "email": to_email,
-            "error": error_msg
+            "error": error_msg,
+            "message": f"FAILED (Gmail API service failed: {error_msg})"
         }
 
     try:
@@ -179,10 +180,10 @@ def send_action_item_notification(
         ).execute()
         
         msg_id = sent_response.get("id")
-        status_msg = f"SENT (Message ID: {msg_id})"
+        status_msg = f"SENT (Email successfully sent by Gmail. Message ID: {msg_id})"
         logger.info(f"{assignee_name} -> {to_email} -> {status_msg}")
         return {
-            "status": "sent",
+            "status": "SENT",
             "assignee": assignee_name,
             "email": to_email,
             "message_id": msg_id,
@@ -192,17 +193,19 @@ def send_action_item_notification(
         err = f"Gmail API HTTP error: {error}"
         logger.error(f"{assignee_name} -> {to_email} -> FAILED ({err})")
         return {
-            "status": "failed_api",
+            "status": "FAILED",
             "assignee": assignee_name,
             "email": to_email,
-            "error": err
+            "error": err,
+            "message": f"FAILED ({err})"
         }
     except Exception as e:
         err = f"Failed to send email: {e}"
         logger.error(f"{assignee_name} -> {to_email} -> FAILED ({err})")
         return {
-            "status": "failed",
+            "status": "FAILED",
             "assignee": assignee_name,
             "email": to_email,
-            "error": err
+            "error": err,
+            "message": f"FAILED ({err})"
         }

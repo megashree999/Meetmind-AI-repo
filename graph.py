@@ -440,15 +440,33 @@ def create_jira_ticket(state: AgentState):
                 print(f"[JIRA TICKET] SUCCESS: {issue_key} ({issue_url})")
                 results.append(result_str)
             else:
+                status_explanation = "Fallback simulation"
+                if response.status_code == 400:
+                    status_explanation = "Bad Request (Check project key, permissions, or API token)"
+                elif response.status_code == 401:
+                    status_explanation = "Authentication failed (Check JIRA_EMAIL and JIRA_API_TOKEN)"
+                elif response.status_code == 403:
+                    status_explanation = "Permission denied (User does not have access to project)"
+                elif response.status_code == 404:
+                    status_explanation = "Not found (Check JIRA_BASE_URL or resource)"
+
+                safe_err = response.text[:200]
+                try:
+                    err_json = response.json()
+                    if "errorMessages" in err_json and err_json["errorMessages"]:
+                        safe_err = err_json["errorMessages"][0]
+                except Exception:
+                    pass
+
                 err_str = (
                     f"MOCK JIRA ISSUE (FALLBACK)\n"
                     f"Title: {title}\n"
                     f"Description: {desc}\n"
                     f"HTTP Status: {response.status_code}\n"
-                    f"Error: {response.text[:200]}\n"
-                    f"Status: Fallback simulation"
+                    f"Error: {safe_err}\n"
+                    f"Status: {status_explanation}"
                 )
-                print(f"[JIRA TICKET] API Error HTTP {response.status_code}: {response.text[:200]}")
+                print(f"[JIRA TICKET] API Error HTTP {response.status_code}: {safe_err}")
                 results.append(err_str)
         except Exception as e:
             err_str = (

@@ -16,11 +16,18 @@ def run_tests():
         ("Megashree", "megashree999@gmail.com"),
         ("Kashif", "kashifahamad2003@gmail.com"),
         ("Ali", "amohammedali2005@gmail.com"),
+        ("Arun", "arun@company.com"),
+        ("Priya", "priya@company.com"),
+        ("Rahul", "rahul@company.com"),
+        ("Divya", "divya@company.com"),
+        ("Sanjay", "sanjay@company.com"),
+        ("Anitha", "anitha@company.com"),
         ("Unknown person", "email not found"),
         ("John Doe", "email not found"),
         ("megashree", "megashree999@gmail.com"),  # case-insensitive check
         ("kashif", "kashifahamad2003@gmail.com"),     # case-insensitive check
         ("ali", "amohammedali2005@gmail.com"),        # case-insensitive check
+        ("arun", "arun@company.com"),                 # case-insensitive check
         ("", "email not found"),                     # empty string check
         (None, "email not found")                    # None check
     ]
