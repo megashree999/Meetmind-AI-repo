@@ -24,6 +24,12 @@ class ActionItem(BaseModel):
     task: str = Field(description="The task that needs to be done")
     assignee: Optional[str] = Field(description="The person responsible for the task")
     deadline: Optional[str] = Field(description="The deadline for the task")
+    context: Optional[str] = Field(default=None, description="Why this task was discussed and the relevant discussion surrounding it. Filter out unrelated meeting discussions. Only include information explicitly present.")
+    progress: Optional[str] = Field(default=None, description="Information about what has already been completed or discussed regarding this specific task. Omit and return null if not explicitly mentioned. NEVER output generic values like 'To-Do', 'Pending', 'Not started', or 'In progress'.")
+    expected_outcome: Optional[str] = Field(default=None, description="What the assignee is expected to achieve, based ONLY on the transcript. Do not invent details.")
+    decisions: Optional[str] = Field(default=None, description="Specific decisions or agreements made during the meeting that affect this task. Omit if none.")
+    next_steps: Optional[str] = Field(default=None, description="Concrete next steps extracted from the transcript. Do not invent steps.")
+    blockers: Optional[str] = Field(default=None, description="Blockers or dependencies explicitly mentioned for this task. Omit if none.")
 
 class JiraTask(BaseModel):
     title: str = Field(description="Title of the Jira task")
@@ -34,10 +40,36 @@ class GitHubIssue(BaseModel):
     title: str = Field(description="Title of the GitHub issue")
     description: str = Field(description="Description of the GitHub issue, including testing details or reproduction info")
 
+class ActionItemDetails(BaseModel):
+    deadline: Optional[str] = Field(description="The deadline for the task")
+    context: Optional[str] = Field(default=None, description="Why this task was discussed and the relevant discussion surrounding it. Filter out unrelated meeting discussions. Only include information explicitly present.")
+    progress: Optional[str] = Field(default=None, description="Information about what has already been completed or discussed regarding this specific task. Omit and return null if not explicitly mentioned. NEVER output generic values like 'To-Do', 'Pending', 'Not started', or 'In progress'.")
+    expected_outcome: Optional[str] = Field(default=None, description="What the assignee is expected to achieve, based ONLY on the transcript. Do not invent details.")
+    decisions: Optional[str] = Field(default=None, description="Specific decisions or agreements made during the meeting that affect this task. Omit if none.")
+    next_steps: Optional[str] = Field(default=None, description="Concrete next steps extracted from the transcript. Do not invent steps.")
+    blockers: Optional[str] = Field(default=None, description="Blockers or dependencies explicitly mentioned for this task. Omit if none.")
+
+class RawActionItem(BaseModel):
+    assignee: str = Field(description="The person responsible for the task")
+    task: str = Field(description="A brief description of the task")
+
+class MeetingExtractionPass1(BaseModel):
+    summary: str = Field(description="A concise summary of the meeting")
+    decisions: List[str] = Field(description="A list of key decisions made during the meeting")
+    action_items: List[RawActionItem] = Field(description="A COMPLETE and EXHAUSTIVE list of EVERY SINGLE action item extracted from the meeting. You MUST include every person mentioned with a task.")
+    jira_tasks: List[JiraTask] = Field(
+        default_factory=list,
+        description="Explicit Jira tasks agreed to be created in Jira during the meeting"
+    )
+    github_issues: List[GitHubIssue] = Field(
+        default_factory=list,
+        description="Explicit GitHub issues agreed to be created in GitHub during the meeting"
+    )
+
 class MeetingExtraction(BaseModel):
     summary: str = Field(description="A concise summary of the meeting")
     decisions: List[str] = Field(description="A list of key decisions made during the meeting")
-    action_items: List[ActionItem] = Field(description="A list of action items extracted from the meeting")
+    action_items: List[ActionItem] = Field(description="A COMPLETE and EXHAUSTIVE list of EVERY SINGLE action item extracted from the meeting. You MUST include every person mentioned with a task.")
     jira_tasks: List[JiraTask] = Field(
         default_factory=list,
         description="Explicit Jira tasks agreed to be created in Jira during the meeting"
@@ -88,7 +120,7 @@ from team_directory import get_assignee_email, load_team_members
 from gmail_service import send_action_item_notification
 
 def get_llm(model="llama3.2:3b", temperature=0):
-    return ChatOllama(model=model, temperature=temperature)
+    return ChatOllama(model=model, temperature=temperature, num_predict=2000)
 
 def get_vector_store():
     embeddings = OllamaEmbeddings(model="nomic-embed-text")
@@ -102,19 +134,80 @@ def extract_meeting(state: AgentState):
     """Extract summary, action items, decisions, Jira tasks, and GitHub issues."""
     transcript = state.get("transcript", "")
     llm = get_llm()
-    structured_llm = llm.with_structured_output(MeetingExtraction)
-    prompt = f"""You are an expert executive meeting assistant. Analyze the following meeting transcript.
+    structured_llm_pass1 = llm.with_structured_output(MeetingExtractionPass1)
+    prompt_pass1 = f"""You are an expert executive meeting assistant. Analyze the following meeting transcript.
 Extract the structured meeting details into the specified schema:
-1. summary: A concise summary of the meeting.
+1. summary: A concise but detailed paragraph summarizing the actual meeting discussion. 
+Generate the meeting summary using ONLY the CURRENT TRANSCRIPT provided below.
+Do not use retrieved_context, previous meetings, historical ChromaDB results, memory, or information not present in the current transcript.
+Do not invent participants, tasks, decisions, deadlines, or events.
+DO NOT just output the meeting title. You must summarize the CURRENT TRANSCRIPT content.
 2. decisions: Key decisions made during the meeting.
-3. action_items: Every assigned action item with assignee, task, and deadline.
-4. jira_tasks: Tasks where the team explicitly agreed to create a Jira ticket. Extract exactly ONE Jira task for each agreed topic (for example: title 'Login Timeout Issue' with description detailing the investigation into the authentication service).
-5. github_issues: Issues where the team explicitly agreed to create a GitHub issue. Extract exactly ONE GitHub issue for each agreed topic (for example: title 'Concurrent Login Testing Problem' with description detailing the concurrent-login testing problem).
+3. action_items: Every assigned action item with assignee and task.
+4. jira_tasks: Tasks where the team explicitly agreed to create a Jira ticket. Extract exactly ONE Jira task for each agreed topic.
+5. github_issues: Issues where the team explicitly agreed to create a GitHub issue. Extract exactly ONE GitHub issue for each agreed topic.
+
+CRITICAL, MANDATORY INSTRUCTIONS:
+- READ THE TRANSCRIPT LINE BY LINE.
+- You must identify EVERY SINGLE action item for EVERY SINGLE person.
+- If there are 6 people mentioned with tasks, YOU MUST OUTPUT AT LEAST 6 ACTION ITEMS in the action_items array.
+- DO NOT STOP AFTER THE FIRST ITEM. YOU MUST EXTRACT THEM ALL.
+- If the same person has multiple tasks, output multiple items for them.
+
+EXAMPLE OUTPUT FORMAT for action_items:
+[
+  {{"assignee": "Alice", "task": "Update the documentation by Friday"}},
+  {{"assignee": "Bob", "task": "Review the pull request"}},
+  {{"assignee": "Charlie", "task": "Fix the database bug"}}
+]
 
 Meeting Transcript:
 {transcript}"""
-    result = structured_llm.invoke(prompt)
-    return {"analysis": result}
+    result_pass1 = structured_llm_pass1.invoke(prompt_pass1)
+
+    structured_llm_pass2 = llm.with_structured_output(ActionItemDetails)
+    detailed_action_items = []
+    
+    if result_pass1 and result_pass1.action_items:
+        for raw_item in result_pass1.action_items:
+            prompt_pass2 = f"""Extract details strictly for the specific task '{raw_item.task}' assigned to '{raw_item.assignee}'.
+CRITICAL INSTRUCTIONS:
+- ONLY extract information related to THIS SPECIFIC TASK.
+- Do NOT copy deadlines, contexts, or any details from other tasks mentioned in the transcript.
+- If a field is not explicitly stated for THIS SPECIFIC TASK, you MUST leave it null.
+- Do not output generic fillers like "Not specified", "N/A", or "None". Leave the field null.
+
+Meeting Transcript:
+{transcript}"""
+            try:
+                details = structured_llm_pass2.invoke(prompt_pass2)
+                detailed_action_items.append(ActionItem(
+                    assignee=raw_item.assignee,
+                    task=raw_item.task,
+                    deadline=details.deadline,
+                    context=details.context,
+                    progress=details.progress,
+                    expected_outcome=details.expected_outcome,
+                    decisions=details.decisions,
+                    next_steps=details.next_steps,
+                    blockers=details.blockers
+                ))
+            except Exception as e:
+                print(f"Error expanding action item {raw_item.task}: {e}")
+                detailed_action_items.append(ActionItem(
+                    assignee=raw_item.assignee,
+                    task=raw_item.task
+                ))
+
+    final_result = MeetingExtraction(
+        summary=result_pass1.summary if result_pass1 else "No summary",
+        decisions=result_pass1.decisions if result_pass1 else [],
+        action_items=detailed_action_items,
+        jira_tasks=result_pass1.jira_tasks if result_pass1 else [],
+        github_issues=result_pass1.github_issues if result_pass1 else []
+    )
+    
+    return {"analysis": final_result}
 
 def index_transcript(state: AgentState):
     """Chunk and index the transcript into Chroma."""
@@ -185,40 +278,101 @@ def send_email_notifications(state: AgentState):
     if not action_items:
         return {}
 
-    notifications = []
-    seen_keys = set()
-    
-    # Check already processed notifications in state to prevent duplicates
-    existing_notifs = state.get("email_notifications") or []
-    for notif in existing_notifs:
-        seen_keys.add((notif.get("assignee"), notif.get("task")))
-
+    grouped_items = {}
     for item in action_items:
         if isinstance(item, dict):
             task = item.get("task", "")
             assignee = item.get("assignee")
             deadline = item.get("deadline")
+            context_str = item.get("context")
+            progress_str = item.get("progress")
+            expected_outcome = item.get("expected_outcome")
+            item_decisions = item.get("decisions")
+            next_steps = item.get("next_steps")
+            blockers = item.get("blockers")
         else:
             task = getattr(item, "task", "")
             assignee = getattr(item, "assignee", None)
             deadline = getattr(item, "deadline", None)
+            context_str = getattr(item, "context", None)
+            progress_str = getattr(item, "progress", None)
+            expected_outcome = getattr(item, "expected_outcome", None)
+            item_decisions = getattr(item, "decisions", None)
+            next_steps = getattr(item, "next_steps", None)
+            blockers = getattr(item, "blockers", None)
 
         assignee_name = assignee.strip() if assignee else "Unassigned"
+        if assignee_name not in grouped_items:
+            grouped_items[assignee_name] = []
         
-        # Deduplication check
-        item_key = (assignee_name, task)
-        if item_key in seen_keys:
+        grouped_items[assignee_name].append({
+            "task": task,
+            "deadline": deadline,
+            "context_str": context_str,
+            "progress_str": progress_str,
+            "expected_outcome": expected_outcome,
+            "item_decisions": item_decisions,
+            "next_steps": next_steps,
+            "blockers": blockers
+        })
+
+    notifications = []
+    seen_keys = set()
+    
+    # Check already processed notifications in state to prevent duplicates (using assignee name)
+    existing_notifs = state.get("email_notifications") or []
+    for notif in existing_notifs:
+        seen_keys.add(notif.get("assignee"))
+
+    for assignee_name, tasks_list in grouped_items.items():
+        if assignee_name in seen_keys:
             duplicate_record = {
                 "status": "skipped_duplicate",
                 "assignee": assignee_name,
                 "email": "N/A",
-                "task": task,
-                "message": f"SKIPPED (duplicate notification for {assignee_name}: {task})"
+                "task": "Multiple tasks",
+                "message": f"SKIPPED (duplicate notification for {assignee_name})"
             }
-            print(f"[EMAIL NOTIFICATION] Assignee: {assignee_name} -> Task: '{task}' -> Status: skipped_duplicate")
+            print(f"[EMAIL NOTIFICATION] Assignee: {assignee_name} -> Status: skipped_duplicate")
             notifications.append(duplicate_record)
             continue
-        seen_keys.add(item_key)
+        seen_keys.add(assignee_name)
+
+        if len(tasks_list) == 1:
+            t = tasks_list[0]
+            task = t['task']
+            deadline = t['deadline']
+            context_str = t['context_str']
+            progress_str = t['progress_str']
+            expected_outcome = t['expected_outcome']
+            item_decisions = t['item_decisions']
+            next_steps = t['next_steps']
+            blockers = t['blockers']
+        else:
+            task_parts = []
+            deadline_parts = []
+            context_parts = []
+            
+            def is_valid_field(val):
+                if not val: return False
+                banned = {"none", "n/a", "null", "", "not specified", "to-do", "pending", "not started", "in progress"}
+                return str(val).lower().strip() not in banned
+
+            for i, t in enumerate(tasks_list, 1):
+                task_parts.append(f"{i}. {t['task']}")
+                if is_valid_field(t['deadline']):
+                    deadline_parts.append(f"{i}. {t['deadline']}")
+                if is_valid_field(t['context_str']):
+                    context_parts.append(f"{i}. {t['context_str']}")
+            
+            task = "\n".join(task_parts)
+            deadline = "\n".join(deadline_parts) if deadline_parts else None
+            context_str = "\n".join(context_parts) if context_parts else None
+            progress_str = None
+            expected_outcome = None
+            item_decisions = None
+            next_steps = None
+            blockers = None
 
         # Lookup registered email from team_directory
         recipient_email = get_assignee_email(assignee_name)
@@ -229,7 +383,13 @@ def send_email_notifications(state: AgentState):
             assignee_name=assignee_name,
             task=task,
             deadline=deadline,
-            summary=summary
+            summary=summary,
+            context=context_str,
+            progress=progress_str,
+            expected_outcome=expected_outcome,
+            decisions=item_decisions,
+            next_steps=next_steps,
+            blockers=blockers
         )
         result["task"] = task
         result["deadline"] = deadline
@@ -327,14 +487,18 @@ def rag_query(state: AgentState):
             return {"retrieved_context": "Deterministic calculation from transcript", "answer": answer}
 
     # 2. Normal RAG behavior
-    current_meeting_keywords = [
-        "this meeting", "this transcript", "today's meeting", 
-        "in this meeting", "who attended", "how many people"
+    historical_keywords = [
+        "past meeting", "previous meeting", "other meeting", 
+        "historical", "last meeting", "all meetings", "before this"
     ]
     
+    # Default to current meeting if we have a transcript, unless user explicitly asks for history
     is_current_meeting = False
-    if meeting_id and any(kw in q_lower for kw in current_meeting_keywords):
-        is_current_meeting = True
+    if meeting_id:
+        if any(kw in q_lower for kw in historical_keywords):
+            is_current_meeting = False
+        else:
+            is_current_meeting = True
 
     vector_store = get_vector_store()
     
@@ -355,7 +519,7 @@ def rag_query(state: AgentState):
         context = f"Full Transcript:\n{transcript}\n\nRelevant Chunks:\n{context}"
     
     llm = get_llm()
-    prompt = f"Answer the user's question based ONLY on the context below. Do not invent participants or events not in the context.\n\nContext:\n{context}\n\nQuestion: {query}"
+    prompt = f"Answer the user's question based ONLY on the context below. Do not invent participants or events not in the context. If the information is not available in the context provided, clearly state that the information is not available in the current meeting.\n\nContext:\n{context}\n\nQuestion: {query}"
     response = llm.invoke(prompt)
     
     return {"retrieved_context": context, "answer": response.content}

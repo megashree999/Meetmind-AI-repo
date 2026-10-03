@@ -3,7 +3,7 @@ import base64
 import re
 import logging
 from email.mime.text import MIMEText
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -72,23 +72,58 @@ def create_email_content(
     assignee_name: str,
     task: str,
     deadline: Optional[str] = None,
-    summary: Optional[str] = None
+    summary: Optional[str] = None,
+    context: Optional[str] = None,
+    progress: Optional[str] = None,
+    expected_outcome: Optional[str] = None,
+    decisions: Optional[str] = None,
+    next_steps: Optional[str] = None,
+    blockers: Optional[str] = None
 ) -> Tuple[str, str]:
     """Generate subject and body for action item notification."""
-    subject = f"[MeetMind AI] Action Item Assigned: {task}"
+    # Ensure subject is short
+    short_task = task[:50] + "..." if len(task) > 50 else task
+    subject = f"[MeetMind AI] Action Item Assigned: {short_task}"
+    
+    def format_val(val):
+        if not val:
+            return "Not specified"
+        if isinstance(val, list):
+            if len(val) == 0: return "Not specified"
+            val = ", ".join(str(v) for v in val)
+        lower_val = str(val).lower().strip()
+        banned = {"none", "n/a", "null", "", "not specified", "to-do", "pending", "not started", "in progress", "no blockers", "no decisions"}
+        return str(val) if lower_val not in banned else "Not specified"
+
+    clean_task = format_val(task)
+    clean_deadline = format_val(deadline)
+    clean_context = format_val(context)
+    clean_summary = format_val(summary)
+    
     body = f"""Hi {assignee_name},
 
-You have been assigned a new action item from the recent meeting:
+You have been assigned an action item from the meeting.
 
-Task: {task}
-Deadline: {deadline or 'Not specified'}
+────────────────────────
 
-Meeting Summary:
-{summary or 'N/A'}
+TASK:
+{clean_task}
 
----
-Generated automatically by MeetMind AI
-"""
+DEADLINE:
+{clean_deadline}
+
+CONTEXT:
+{clean_context}
+
+MEETING SUMMARY:
+{clean_summary}
+
+────────────────────────
+
+Please complete the above task by the discussed deadline.
+
+Regards,
+MeetMind AI"""
     return subject, body
 
 def send_action_item_notification(
@@ -97,6 +132,12 @@ def send_action_item_notification(
     task: str,
     deadline: Optional[str] = None,
     summary: Optional[str] = None,
+    context: Optional[str] = None,
+    progress: Optional[str] = None,
+    expected_outcome: Optional[str] = None,
+    decisions: Optional[str] = None,
+    next_steps: Optional[str] = None,
+    blockers: Optional[str] = None,
     force_simulate: Optional[bool] = None
 ) -> Dict[str, Any]:
     """
@@ -140,7 +181,10 @@ def send_action_item_notification(
             "message": status_msg
         }
 
-    subject, body = create_email_content(assignee_name, task, deadline, summary)
+    subject, body = create_email_content(
+        assignee_name, task, deadline, summary, 
+        context, progress, expected_outcome, decisions, next_steps, blockers
+    )
 
     # 3. Check if notifications are enabled
     notifications_enabled = os.environ.get("EMAIL_NOTIFICATIONS_ENABLED", "false").lower() == "true"
@@ -187,7 +231,8 @@ def send_action_item_notification(
             "assignee": assignee_name,
             "email": to_email,
             "message_id": msg_id,
-            "message": status_msg
+            "message": status_msg,
+            "body": body
         }
     except HttpError as error:
         err = f"Gmail API HTTP error: {error}"
