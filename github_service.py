@@ -138,7 +138,7 @@ def create_github_issue_api(title: str, body: str) -> Dict[str, Any]:
             json=payload,
             timeout=20
         )
-        if resp.status_code in (200, 201):
+        if resp.status_code in (200, 201, 202):
             issue_data = resp.json()
             issue_number = issue_data.get("number")
             issue_url = issue_data.get("html_url")

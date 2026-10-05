@@ -23,7 +23,8 @@ if os.environ.get("LANGSMITH_API_KEY") == "your_langsmith_api_key_here":
 class ActionItem(BaseModel):
     task: str = Field(description="The task that needs to be done")
     assignee: Optional[str] = Field(description="The person responsible for the task")
-    deadline: Optional[str] = Field(description="The deadline for the task")
+    deadline: Optional[str] = Field(description="The deadline for the task, formatted exactly as YYYY-MM-DD")
+    task_size: Optional[Literal["SMALL", "MEDIUM", "LARGE"]] = Field(default=None, description="Task size classification: SMALL, MEDIUM, or LARGE.")
     context: Optional[str] = Field(default=None, description="Why this task was discussed and the relevant discussion surrounding it. Filter out unrelated meeting discussions. Only include information explicitly present.")
     progress: Optional[str] = Field(default=None, description="Information about what has already been completed or discussed regarding this specific task. Omit and return null if not explicitly mentioned. NEVER output generic values like 'To-Do', 'Pending', 'Not started', or 'In progress'.")
     expected_outcome: Optional[str] = Field(default=None, description="What the assignee is expected to achieve, based ONLY on the transcript. Do not invent details.")
@@ -41,7 +42,8 @@ class GitHubIssue(BaseModel):
     description: str = Field(description="Description of the GitHub issue, including testing details or reproduction info")
 
 class ActionItemDetails(BaseModel):
-    deadline: Optional[str] = Field(description="The deadline for the task")
+    deadline: Optional[str] = Field(description="The deadline for the task, formatted exactly as YYYY-MM-DD. Calculate this based on the current meeting date/time provided.")
+    task_size: Optional[Literal["SMALL", "MEDIUM", "LARGE"]] = Field(default=None, description="Classify the task size: SMALL (focused/limited scope), MEDIUM (multiple related steps), LARGE (substantial work/integration).")
     context: Optional[str] = Field(default=None, description="Why this task was discussed and the relevant discussion surrounding it. Filter out unrelated meeting discussions. Only include information explicitly present.")
     progress: Optional[str] = Field(default=None, description="Information about what has already been completed or discussed regarding this specific task. Omit and return null if not explicitly mentioned. NEVER output generic values like 'To-Do', 'Pending', 'Not started', or 'In progress'.")
     expected_outcome: Optional[str] = Field(default=None, description="What the assignee is expected to achieve, based ONLY on the transcript. Do not invent details.")
@@ -170,12 +172,17 @@ Meeting Transcript:
     
     if result_pass1 and result_pass1.action_items:
         for raw_item in result_pass1.action_items:
+            import datetime
+            current_time_str = datetime.datetime.now().strftime("%A, %B %d, %Y %I:%M %p")
             prompt_pass2 = f"""Extract details strictly for the specific task '{raw_item.task}' assigned to '{raw_item.assignee}'.
 CRITICAL INSTRUCTIONS:
 - ONLY extract information related to THIS SPECIFIC TASK.
 - Do NOT copy deadlines, contexts, or any details from other tasks mentioned in the transcript.
 - If a field is not explicitly stated for THIS SPECIFIC TASK, you MUST leave it null.
 - Do not output generic fillers like "Not specified", "N/A", or "None". Leave the field null.
+- The current meeting date/time is {current_time_str}. Use this as the reference when resolving relative deadlines (e.g., 'tomorrow', 'Friday', 'next Monday'). If a deadline cannot be confidently interpreted, leave it null.
+- You MUST output the `deadline` field exactly in YYYY-MM-DD format based on {current_time_str}.
+- You MUST classify the `task_size` field as one of: SMALL, MEDIUM, LARGE.
 
 Meeting Transcript:
 {transcript}"""
@@ -185,6 +192,7 @@ Meeting Transcript:
                     assignee=raw_item.assignee,
                     task=raw_item.task,
                     deadline=details.deadline,
+                    task_size=details.task_size,
                     context=details.context,
                     progress=details.progress,
                     expected_outcome=details.expected_outcome,
@@ -277,6 +285,17 @@ def send_email_notifications(state: AgentState):
         
     if not action_items:
         return {}
+
+    transcript = state.get("transcript", "")
+    meeting_title = "Unknown Meeting"
+    if transcript:
+        for line in transcript.split("\n"):
+            if line.strip():
+                meeting_title = line.strip()
+                break
+
+    from reminder_service import schedule_reminders
+    schedule_reminders(action_items, meeting_title)
 
     grouped_items = {}
     for item in action_items:
@@ -658,7 +677,7 @@ def create_jira_ticket(state: AgentState):
             print(f"[JIRA DIAG] Response HTTP Status: {response.status_code}")
             print(f"[JIRA DIAG] Response Body: {response.text[:500]}")
 
-            if response.status_code in (200, 201):
+            if response.status_code in (200, 201, 202):
                 data = response.json()
                 issue_key = data.get("key")
                 issue_url = f"{jira_base_url}/browse/{issue_key}"
