@@ -20,7 +20,14 @@ def is_valid_email(email: Optional[str]) -> bool:
     if email == "email not found":
         return False
     pattern = r"^[\w\.-]+@[\w\.-]+\.\w+$"
-    return bool(re.match(pattern, email))
+    if not bool(re.match(pattern, email)):
+        return False
+    
+    # Block demo addresses
+    if email.endswith("@company.com") or email.endswith("@example.com"):
+        return False
+        
+    return True
 
 def get_gmail_service() -> Tuple[Optional[Any], str]:
     """

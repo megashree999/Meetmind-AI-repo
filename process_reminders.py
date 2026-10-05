@@ -83,6 +83,13 @@ def process_reminders():
         
         subject, body = create_reminder_email_content(assignee, task, deadline, meeting)
         
+        from gmail_service import is_valid_email
+        if not is_valid_email(email):
+            print(f"SKIPPED (Invalid or demo recipient email: '{email}') for reminder {r_id}")
+            c.execute("UPDATE reminders SET status = 'SKIPPED' WHERE reminder_id = ?", (r_id,))
+            conn.commit()
+            continue
+        
         notifications_enabled = os.environ.get("EMAIL_NOTIFICATIONS_ENABLED", "false").lower() == "true"
         
         if not notifications_enabled:
