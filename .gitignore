@@ -3,7 +3,9 @@
 
 # Gmail OAuth credentials
 token.json
+token_calendar.json
 credentials.json
+client_secret.json
 
 # Python virtual environment
 venv/
@@ -26,3 +28,28 @@ Thumbs.db
 
 # LangGraph local runtime data
 .langgraph_api/
+
+# SQLite Databases
+reminders.db
+
+# Local production and personal databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Scheduler logs
+*.log
+
+# Backups
+*_backup.db
+# Frontend dependencies and build output
+frontend/node_modules/
+frontend/dist/
+ 
+# Frontend dependencies and build output 
+frontend/node_modules/ 
+frontend/dist/
+
+# Frontend dependencies and build output
+frontend/node_modules/
+frontend/dist/

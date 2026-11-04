@@ -20,7 +20,14 @@ def is_valid_email(email: Optional[str]) -> bool:
     if email == "email not found":
         return False
     pattern = r"^[\w\.-]+@[\w\.-]+\.\w+$"
-    return bool(re.match(pattern, email))
+    if not bool(re.match(pattern, email)):
+        return False
+    
+    # Block demo addresses
+    if email.endswith("@company.com") or email.endswith("@example.com"):
+        return False
+        
+    return True
 
 def get_gmail_service() -> Tuple[Optional[Any], str]:
     """
@@ -100,6 +107,8 @@ def create_email_content(
     clean_context = format_val(context)
     clean_summary = format_val(summary)
     
+    deadline_section = f"DEADLINE:\n{clean_deadline}\n\n" if clean_deadline != "Not specified" else ""
+    
     body = f"""Hi {assignee_name},
 
 You have been assigned an action item from the meeting.
@@ -109,10 +118,7 @@ You have been assigned an action item from the meeting.
 TASK:
 {clean_task}
 
-DEADLINE:
-{clean_deadline}
-
-CONTEXT:
+{deadline_section}CONTEXT:
 {clean_context}
 
 MEETING SUMMARY:

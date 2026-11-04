@@ -4,7 +4,7 @@ from requests.auth import HTTPBasicAuth
 from dotenv import load_dotenv
 
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-load_dotenv(env_path, override=True)
+load_dotenv(env_path, override=False)
 
 jira_base_url = (os.environ.get("JIRA_BASE_URL") or os.environ.get("JIRA_URL") or "").rstrip("/")
 jira_email = (os.environ.get("JIRA_EMAIL") or "").strip()
